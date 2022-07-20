@@ -1,0 +1,219 @@
+*--------------------------------------------------------------------------------------------------
+* CLARO
+*--------------------------------------------------------------------------------------------------
+* Módulo      : FI
+* Transações  : ZTC412
+* Objeto      : ZRFIC044
+* Tipo        : Report
+*--------------------------------------------------------------------------------------------------
+* Codificação Inicial: Cesar Samecima - Deloitte
+*--------------------------------------------------------------------------------------------------
+* Descrição   : Responsabilidade Solidária: programa para bloqueio/liberação de partidas
+*               para pagamento e compensação de retenção conforme dados carregados do Excel
+* Variáveis TVARV: ZRFIC044_BSCHL
+*                  ZRFIC044_ZLSPR
+*                  ZRFIC044_WITHT
+*--------------------------------------------------------------------------------------------------
+* Login          Data           CR             Comentário
+*------------   ------------   ------------   ------------
+* 93321100       19/12/2018     ECDK9A0HF5     Desenvolvimento inicial
+*--------------------------------------------------------------------------------------------------
+REPORT  zrfic044.
+
+*--------------------------------------------------------------------------------------------------
+* INCLUDE
+*--------------------------------------------------------------------------------------------------
+INCLUDE: zrfic044_top,
+         zrfic044_incl.
+
+*--------------------------------------------------------------------------------------------------
+* TELA DE SELEÇÃO
+*--------------------------------------------------------------------------------------------------
+SELECTION-SCREEN BEGIN OF BLOCK bl01 WITH FRAME TITLE text-t01.
+PARAMETERS: p_file TYPE rlgrap-filename.
+SELECTION-SCREEN END OF BLOCK bl01.
+
+SELECTION-SCREEN BEGIN OF BLOCK bl02 WITH FRAME TITLE text-t02.
+PARAMETER: rb_fore RADIOBUTTON GROUP g1,
+           rb_back RADIOBUTTON GROUP g1.
+SELECTION-SCREEN END OF BLOCK bl02.
+
+SELECTION-SCREEN: FUNCTION KEY 1.
+
+*--------------------------------------------------------------------------------------------------
+* INITIALIZATION
+*--------------------------------------------------------------------------------------------------
+INITIALIZATION.
+
+  MOVE 'LOG' TO sscrfields-functxt_01.
+
+*--------------------------------------------------------------------------------------------------
+* AT SELECTION-SCREEN
+*--------------------------------------------------------------------------------------------------
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_file .
+
+  CALL FUNCTION 'KD_GET_FILENAME_ON_F4'
+    EXPORTING
+      field_name    = 'p_file'
+      mask          = '*.xlsx'
+      static        = 'X'
+    CHANGING
+      file_name     = p_file
+    EXCEPTIONS
+      mask_too_long = 1
+      OTHERS        = 2.
+
+AT SELECTION-SCREEN.
+
+  IF sy-ucomm = 'FC01'.
+    CALL TRANSACTION 'ZTC415'.
+
+  ENDIF.
+
+*--------------------------------------------------------------------------------------------------
+* PROGRAMA PRINCIPAL
+*--------------------------------------------------------------------------------------------------
+START-OF-SELECTION.
+
+  PERFORM zf_carrega_arquivo.
+
+  PERFORM zf_trata_arquivo.
+
+  IF rb_back IS NOT INITIAL.
+
+    PERFORM zf_processa_job.
+
+  ELSEIF rb_fore IS NOT INITIAL.
+
+    PERFORM zf_processamento.
+
+  ENDIF.
+
+END-OF-SELECTION.
+
+  PERFORM zf_exibe_log.
+
+*&---------------------------------------------------------------------*
+*&      Form  ZF_CARREGA_ARQUIVO
+*&---------------------------------------------------------------------*
+*       Carrega arquivo
+*----------------------------------------------------------------------*
+FORM zf_carrega_arquivo .
+
+  IF p_file IS NOT INITIAL.
+    FIND '.xlsx' IN p_file.
+
+    IF sy-subrc IS INITIAL.
+      PERFORM zf_carrega_excel.
+
+    ELSE.
+      MESSAGE 'Arquivo com formato inválido' TYPE 'I'.
+
+    ENDIF.
+  ELSE.
+    MESSAGE 'Entre com um diretório válido' TYPE 'I'.
+
+  ENDIF.
+
+ENDFORM.                    " ZF_CARREGA_ARQUIVO
+
+*&---------------------------------------------------------------------*
+*&      Form  ZF_CARREGA_EXCEL
+*&---------------------------------------------------------------------*
+*       Carrega arquivo em formato Excel
+*----------------------------------------------------------------------*
+FORM zf_carrega_excel .
+
+  PERFORM zf_limpa_dados.
+
+* ABRE ARQUIVO NO FORMATO EXCEL
+  CALL FUNCTION 'KCD_EXCEL_OLE_TO_INT_CONVERT'
+    EXPORTING
+      filename    = p_file   "CAMINHO DO ARQUIVO A SER LIDO
+      i_begin_col = 1        "PRIMEIRA COLUNA A SER LIDA
+      i_begin_row = 2        "PRIMEIRA LINHA A SER LIDA
+      i_end_col   = 20       "NÚMERO MÁXIMO DE COLUNAS NO EXCEL
+      i_end_row   = 2000     "NÚM MÁX. LINHAS EXCEL(EXEMPLO 1000)
+    TABLES
+      intern      = t_tabexcel.
+
+  LOOP AT t_tabexcel FROM 1.
+    CASE t_tabexcel-col.
+      WHEN 1.
+        MOVE: t_tabexcel-value  TO w_arquivo-cod.
+
+      WHEN 2.
+        MOVE: t_tabexcel-value  TO w_arquivo-contratante.
+
+      WHEN 3.
+        MOVE: t_tabexcel-value  TO w_arquivo-cnpj.
+        MOVE: w_arquivo-cnpj(8) TO w_arquivo-cnpj8.
+
+      WHEN 4.
+        MOVE: t_tabexcel-value  TO w_arquivo-fornecedor.
+
+      WHEN 5.
+        MOVE: t_tabexcel-value  TO w_arquivo-cod_penden.
+
+      WHEN 6.
+        MOVE: t_tabexcel-value  TO w_arquivo-tp_penden.
+
+      WHEN 7.
+        MOVE: t_tabexcel-value  TO w_arquivo-tp_medicao.
+
+      WHEN 8.
+        MOVE: t_tabexcel-value  TO w_arquivo-competencia.
+
+      WHEN 9.
+        MOVE: t_tabexcel-value  TO w_arquivo-grau_risco.
+
+      WHEN 10.
+        MOVE: t_tabexcel-value  TO w_arquivo-reten_porc.
+
+      WHEN 11.
+        MOVE: t_tabexcel-value  TO w_arquivo-reten_valr.
+
+      WHEN 12.
+        MOVE: t_tabexcel-value  TO w_arquivo-data_reg.
+
+      WHEN 13.
+        MOVE: t_tabexcel-value  TO w_arquivo-validade.
+
+      WHEN 14.
+        MOVE: t_tabexcel-value  TO w_arquivo-responsavel.
+
+      WHEN OTHERS.
+
+    ENDCASE.
+
+    AT END OF row.
+      APPEND w_arquivo TO t_arquivo.
+      CLEAR: w_arquivo.
+
+    ENDAT.
+  ENDLOOP.
+
+ENDFORM.                    " ZF_CARREGA_EXCEL
+
+*&---------------------------------------------------------------------*
+*&      Form  ZF_TRATA_ARQUIVO
+*&---------------------------------------------------------------------*
+*       Trata formatação do arquivo
+*----------------------------------------------------------------------*
+FORM zf_trata_arquivo .
+
+  DATA: lw_arquivo TYPE ty_arquivo.
+
+  LOOP AT t_arquivo INTO lw_arquivo.
+    TRANSLATE lw_arquivo-reten_porc USING '% '.
+    TRANSLATE lw_arquivo-reten_porc USING ',.'.
+    TRANSLATE lw_arquivo-reten_valr USING '. '.
+    CONDENSE lw_arquivo-reten_valr NO-GAPS.
+    CONDENSE lw_arquivo-reten_porc NO-GAPS.
+
+    MODIFY t_arquivo FROM lw_arquivo INDEX sy-tabix.
+    CLEAR: lw_arquivo.
+
+  ENDLOOP.
+
+ENDFORM.                    " ZF_TRATA_ARQUIVO
